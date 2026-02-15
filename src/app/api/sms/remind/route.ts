@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { db, useLocalDb } from "@/lib/local-db";
 
 // This endpoint can be called by a cron job to send SMS reminders
-// It checks for events happening soon and sends reminders to opted-in guests
 export async function POST(request: Request) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -13,46 +13,61 @@ export async function POST(request: Request) {
 
   try {
     const now = new Date();
-
-    // Find events with SMS reminders enabled
-    const { data: events, error: eventsError } = await supabase
-      .from("events")
-      .select("*")
-      .eq("enable_sms_reminders", true);
-
-    if (eventsError) {
-      return NextResponse.json(
-        { error: eventsError.message },
-        { status: 500 }
-      );
-    }
-
     const reminders: { phone: string; message: string }[] = [];
 
-    for (const event of events || []) {
-      const eventDateTime = new Date(`${event.date}T${event.time}`);
-      const reminderTime = new Date(
-        eventDateTime.getTime() - event.sms_reminder_hours * 60 * 60 * 1000
-      );
+    if (useLocalDb()) {
+      const events = db.events.findWithSmsReminders();
+      for (const event of events) {
+        const eventDateTime = new Date(`${event.date}T${event.time}`);
+        const reminderTime = new Date(
+          eventDateTime.getTime() - event.sms_reminder_hours * 60 * 60 * 1000
+        );
+        const diffMs = Math.abs(now.getTime() - reminderTime.getTime());
+        if (diffMs > 15 * 60 * 1000) continue;
 
-      // Check if we're within 15 min of reminder time
-      const diffMs = Math.abs(now.getTime() - reminderTime.getTime());
-      if (diffMs > 15 * 60 * 1000) continue;
-
-      // Get opted-in RSVPs
-      const { data: rsvps } = await supabase
-        .from("rsvps")
+        const optedIn = db.rsvps.findOptedInByEventId(event.id);
+        for (const rsvp of optedIn) {
+          reminders.push({
+            phone: rsvp.phone!,
+            message: `Salam ${rsvp.first_name}! Reminder: ${event.title} is today at ${event.time} — ${event.location}. Looking forward to seeing you!`,
+          });
+        }
+      }
+    } else {
+      const { data: events, error: eventsError } = await supabase
+        .from("events")
         .select("*")
-        .eq("event_id", event.id)
-        .eq("attending", true)
-        .eq("sms_opt_in", true);
+        .eq("enable_sms_reminders", true);
 
-      for (const rsvp of rsvps || []) {
-        if (!rsvp.phone) continue;
-        reminders.push({
-          phone: rsvp.phone,
-          message: `Salam ${rsvp.first_name}! Reminder: ${event.title} is today at ${event.time} — ${event.location}. Looking forward to seeing you!`,
-        });
+      if (eventsError) {
+        return NextResponse.json(
+          { error: eventsError.message },
+          { status: 500 }
+        );
+      }
+
+      for (const event of events || []) {
+        const eventDateTime = new Date(`${event.date}T${event.time}`);
+        const reminderTime = new Date(
+          eventDateTime.getTime() - event.sms_reminder_hours * 60 * 60 * 1000
+        );
+        const diffMs = Math.abs(now.getTime() - reminderTime.getTime());
+        if (diffMs > 15 * 60 * 1000) continue;
+
+        const { data: rsvps } = await supabase
+          .from("rsvps")
+          .select("*")
+          .eq("event_id", event.id)
+          .eq("attending", true)
+          .eq("sms_opt_in", true);
+
+        for (const rsvp of rsvps || []) {
+          if (!rsvp.phone) continue;
+          reminders.push({
+            phone: rsvp.phone,
+            message: `Salam ${rsvp.first_name}! Reminder: ${event.title} is today at ${event.time} — ${event.location}. Looking forward to seeing you!`,
+          });
+        }
       }
     }
 

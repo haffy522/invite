@@ -1,11 +1,21 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { db, useLocalDb } from "@/lib/local-db";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
+
+  if (useLocalDb()) {
+    const event = db.events.findBySlug(slug);
+    if (!event) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+    const rsvps = db.rsvps.findByEventId(event.id);
+    return NextResponse.json({ event, rsvps });
+  }
 
   const { data: event, error: eventError } = await supabase
     .from("events")
@@ -36,6 +46,14 @@ export async function PATCH(
 ) {
   const { slug } = await params;
   const body = await request.json();
+
+  if (useLocalDb()) {
+    const event = db.events.updateBySlug(slug, body);
+    if (!event) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+    return NextResponse.json(event);
+  }
 
   const { data, error } = await supabase
     .from("events")

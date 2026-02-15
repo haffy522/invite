@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { db, useLocalDb } from "@/lib/local-db";
 
 export async function POST(request: Request) {
   try {
@@ -12,16 +13,23 @@ export async function POST(request: Request) {
       );
     }
 
+    const rsvpData = {
+      event_id: body.event_id,
+      first_name: body.first_name.trim(),
+      attending: body.attending,
+      note: body.note?.trim() || null,
+      phone: body.phone?.trim() || null,
+      sms_opt_in: body.sms_opt_in ?? false,
+    };
+
+    if (useLocalDb()) {
+      const rsvp = db.rsvps.insert(rsvpData);
+      return NextResponse.json(rsvp, { status: 201 });
+    }
+
     const { data, error } = await supabase
       .from("rsvps")
-      .insert({
-        event_id: body.event_id,
-        first_name: body.first_name.trim(),
-        attending: body.attending,
-        note: body.note?.trim() || null,
-        phone: body.phone?.trim() || null,
-        sms_opt_in: body.sms_opt_in ?? false,
-      })
+      .insert(rsvpData)
       .select()
       .single();
 
@@ -30,7 +38,8 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(data, { status: 201 });
-  } catch {
+  } catch (err) {
+    console.error("RSVP error:", err);
     return NextResponse.json(
       { error: "Invalid request body" },
       { status: 400 }
